@@ -1,0 +1,11 @@
+{
+  "domain": "filter_calendar",
+  "name": "Filter Calendar",
+  "documentation": "https://github.com/abates/filter-calendar",
+  "issue_tracker": "https://github.com/abates/filter-calendar/issues",
+  "version": "0.0.1",
+  "config_flow": false,
+  "codeowners": [
+    "@abates"
+  ]
+}
