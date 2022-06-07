@@ -83,7 +83,7 @@ class FilterCalendar(CalendarEntity):
         self.filter = filter_spec
 
     @property
-    def event(self) -> CalendarEvent | None:
+    def event(self) -> CalendarEvent:
         """Return the next upcoming event."""
         if self._events:
             return self._events[0]
