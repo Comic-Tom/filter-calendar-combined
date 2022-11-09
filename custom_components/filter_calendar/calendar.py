@@ -1,13 +1,15 @@
 """Calendar entity for the FilterCalendar integration"""
 
+import asyncio
 from datetime import datetime, timedelta
 import logging
 
+from cachetools import TTLCache, keys
+
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.core import HomeAssistant
-from homeassistant.const import ATTR_NAME
+from homeassistant.const import ATTR_NAME, STATE_UNAVAILABLE
 from homeassistant.helpers import entity_registry
-from homeassistant.helpers.entity_registry import EntityRegistry
 from homeassistant.helpers.entity_platform import (
     AddEntitiesCallback,
     async_get_platforms,
@@ -50,9 +52,88 @@ async def async_setup_platform(
 
     calendar_filter = Filter(config[ATTR_FILTER])
     sensor = FilterCalendar(
-        hass, config[ATTR_NAME], config[ATTR_TRACKING_CALENDAR], calendar_filter
+        config[ATTR_NAME],
+        config[ATTR_TRACKING_CALENDAR],
+        calendar_filter,
     )
+
     async_add_entities([sensor])
+
+
+class CalendarUnavailable(Exception):
+    """Raised when a tracking calendar isn't available."""
+
+
+class CalendarStore:
+    """This class will manage looking up calendars and events."""
+
+    hass: HomeAssistant
+
+    _calendars: dict[str, CalendarEntity]
+
+    _events_cache: TTLCache
+
+    def __new__(cls, hass: HomeAssistant):
+        if not hasattr(cls, "_instance"):
+            cls._instance = super().__new__(cls)
+            cls._instance.hass = hass
+            cls._instance._calendars: dict[str, CalendarEntity] = {}
+            cls._instance._events_cache = TTLCache(
+                maxsize=10,
+                ttl=MIN_TIME_BETWEEN_UPDATES,
+                timer=datetime.now,
+            )
+        return cls._instance
+
+    async def async_get_events(
+        self,
+        entity_id: str,
+        start_date: datetime,
+        end_date: datetime,
+    ) -> list[CalendarEvent]:
+        """Return calendar events within a datetime range."""
+
+        key = keys.hashkey(calendar=entity_id, start_date=start_date, end_date=end_date)
+        try:
+            events = self._events_cache[key]
+            if asyncio.isfuture(events):
+                return await events
+            return events
+        except KeyError:
+            future = asyncio.Future()
+            self._events_cache[key] = future
+            try:
+                cal = await self.async_get_calendar(entity_id)
+                events = await cal.async_get_events(self.hass, start_date, end_date)
+                future.set_result(events)
+                self._events_cache[key] = events
+                return events
+            except CalendarUnavailable as ex:
+                future.set_exception(ex)
+                raise ex
+
+    async def async_get_calendar(self, entity_id):
+        """Retrieve a calendar from the store."""
+
+        try:
+            return self._calendars[entity_id]
+        except KeyError:
+            _LOGGER.debug("Looking for tracking calendar %s", entity_id)
+
+            registry = entity_registry.async_get(self.hass)
+            entry = registry.async_get(entity_id)
+            calendar = None
+            if entry:
+                for platform in async_get_platforms(self.hass, entry.platform):
+                    if entity_id in platform.entities:
+                        if platform.entities[entity_id].available:
+                            calendar = platform.entities[entity_id]
+                            self._calendars[entity_id] = calendar
+                            return calendar
+                        _LOGGER.debug("Calendar %s is not yet ready", entity_id)
+                        break
+        _LOGGER.debug("Calendar %s is not available", entity_id)
+        raise CalendarUnavailable()
 
 
 class Filter:
@@ -72,15 +153,25 @@ class FilterCalendar(CalendarEntity):
     """Base class for calendar event entities."""
 
     def __init__(
-        self, hass: HomeAssistant, name: str, tracking_calendar_id, filter_spec
+        self,
+        name: str,
+        tracking_calendar_id: str,
+        filter_spec,
     ):
-        self.hass = hass
-        self._entity_registry: EntityRegistry = None
         self._name = name
-        self.tracking_calendar_id = tracking_calendar_id
-        self._tracking_calendar: CalendarEntity = None
-        self._events = []
-        self.filter = filter_spec
+        if not tracking_calendar_id.startswith("calendar"):
+            tracking_calendar_id = f"calendar.{tracking_calendar_id}"
+        self._tracking_calendar_id = tracking_calendar_id
+
+        self._filter = filter_spec
+        self._events = None
+
+    @property
+    def state(self) -> str | None:
+        """Return the state of the calendar event."""
+        if self._events is None:
+            return STATE_UNAVAILABLE
+        return super().state
 
     @property
     def event(self) -> CalendarEvent:
@@ -89,39 +180,11 @@ class FilterCalendar(CalendarEntity):
             return self._events[0]
         return None
 
-    async def _get_tracking_calendar(self):
-        """Get the tracking calendar entity"""
-
-        if self._tracking_calendar is None:
-            entity_id = f"calendar.{self.tracking_calendar_id}"
-            _LOGGER.debug("Looking for tracking calendar %s", entity_id)
-            entry = self._entity_registry.async_get(entity_id)
-            if entry:
-                for platform in async_get_platforms(self.hass, entry.platform):
-                    if entity_id in platform.entities:
-                        if platform.entities[entity_id].available:
-                            self._tracking_calendar = platform.entities[entity_id]
-                        else:
-                            _LOGGER.debug(
-                                "Found %s, but it is not yet ready", entity_id
-                            )
-                        return self._tracking_calendar
-                _LOGGER.warning(
-                    "Failed to find tracking calendar with id %s", entity_id
-                )
-        return self._tracking_calendar
-
     @Throttle(MIN_TIME_BETWEEN_UPDATES)
     async def async_update(self):
         """Periodically update the local state"""
-        _LOGGER.debug("Updating %s", self.unique_id)
-        cal = await self._get_tracking_calendar()
-        if cal:
-            self._events = await self.async_get_events(self.hass, None, None)
-
-    async def async_added_to_hass(self):
-        self._entity_registry = entity_registry.async_get(self.hass)
-        await super().async_added_to_hass()
+        _LOGGER.debug("Updating %s", self.entity_id)
+        self._events = await self.async_get_events(self.hass, None, None)
 
     async def async_get_events(
         self,
@@ -131,18 +194,17 @@ class FilterCalendar(CalendarEntity):
     ) -> list[CalendarEvent]:
         """Return calendar events within a datetime range."""
 
-        cal = await self._get_tracking_calendar()
-        if cal:
-            _LOGGER.debug("Pulling events from tracking calendar")
+        try:
             return list(
                 filter(
-                    self.filter,
-                    await self._tracking_calendar.async_get_events(
-                        hass, start_date, end_date
+                    self._filter,
+                    await CalendarStore(hass).async_get_events(
+                        self._tracking_calendar_id, start_date, end_date
                     ),
                 )
             )
-        return []
+        except CalendarUnavailable:
+            return None
 
     @property
     def name(self):
