@@ -165,6 +165,7 @@ class FilterCalendar(CalendarEntity):
 
         self._filter = filter_spec
         self._events = None
+        self._last_update: datetime = None
 
     @property
     def state(self) -> str | None:
@@ -184,7 +185,29 @@ class FilterCalendar(CalendarEntity):
     async def async_update(self):
         """Periodically update the local state"""
         _LOGGER.debug("Updating %s", self.entity_id)
-        self._events = await self.async_get_events(self.hass, None, None)
+        next_update = datetime.combine(datetime.now(), datetime.min.time()) - timedelta(
+            days=1
+        )
+        # Do a full update once a day
+        if next_update != self._last_update:
+            _LOGGER.debug(
+                "Performing full update for %s (from %s to %s)",
+                self.entity_id,
+                self._last_update,
+                next_update,
+            )
+            self._events = await self.async_get_events(self.hass, None, None)
+        # Otherwise just look for events from yesterday forward
+        else:
+            _LOGGER.debug(
+                "Performing incremental update (from %s) for %s",
+                self._last_update,
+                self.entity_id,
+            )
+            self._events = await self.async_get_events(
+                self.hass, self._last_update, None
+            )
+        self._last_update = next_update
 
     async def async_get_events(
         self,
