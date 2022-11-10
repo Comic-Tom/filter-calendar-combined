@@ -3,7 +3,7 @@
   "name": "Filter Calendar",
   "documentation": "https://github.com/abates/filter-calendar",
   "issue_tracker": "https://github.com/abates/filter-calendar/issues",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "config_flow": false,
   "codeowners": [
     "@abates"

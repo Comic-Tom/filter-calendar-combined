@@ -1,7 +1,7 @@
 """Calendar entity for the FilterCalendar integration"""
 
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import logging
 
 from cachetools import TTLCache, keys
@@ -185,9 +185,11 @@ class FilterCalendar(CalendarEntity):
     async def async_update(self):
         """Periodically update the local state"""
         _LOGGER.debug("Updating %s", self.entity_id)
-        next_update = datetime.combine(datetime.now(), datetime.min.time()) - timedelta(
-            days=1
-        )
+        next_update = datetime.combine(
+            datetime.now(timezone.utc),
+            datetime.min.time(),
+            timezone.utc,
+        ) - timedelta(days=1)
         # Do a full update once a day
         if next_update != self._last_update:
             _LOGGER.debug(
