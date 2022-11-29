@@ -198,7 +198,7 @@ class FilterCalendar(CalendarEntity):
                 self._last_update,
                 next_update,
             )
-            self._events = await self.async_get_events(self.hass, None, None)
+            self._events = await self.async_get_events(self.hass, datetime.min, datetime.max)
         # Otherwise just look for events from yesterday forward
         else:
             _LOGGER.debug(
