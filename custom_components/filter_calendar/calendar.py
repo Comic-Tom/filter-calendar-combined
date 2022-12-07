@@ -184,7 +184,7 @@ class FilterCalendar(CalendarEntity):
         """Periodically update the local state"""
         now = datetime.now()
         events = await self.async_get_events(
-            self.hass, now, datetime.max
+            self.hass, now, now + timedelta(days=2)
         )
         events = filter(lambda event: event.start <= now and now <= event.end, events)
         self._event = next(events, None)
