@@ -164,52 +164,30 @@ class FilterCalendar(CalendarEntity):
         self._tracking_calendar_id = tracking_calendar_id
 
         self._filter = filter_spec
-        self._events = None
-        self._last_update: datetime = None
+        self._event = None
 
-    @property
-    def state(self) -> str | None:
-        """Return the state of the calendar event."""
-        if self._events is None:
-            return STATE_UNAVAILABLE
-        return super().state
+    #@property
+    #def state(self) -> str | None:
+        #"""Return the state of the calendar event."""
+        #return self._event
+        #if self._event is None:
+            #return STATE_UNAVAILABLE
+        #return super().state
 
     @property
     def event(self) -> CalendarEvent:
         """Return the next upcoming event."""
-        if self._events:
-            return self._events[0]
-        return None
+        return self._event
 
     @Throttle(MIN_TIME_BETWEEN_UPDATES)
     async def async_update(self):
         """Periodically update the local state"""
-        _LOGGER.debug("Updating %s", self.entity_id)
-        next_update = datetime.combine(
-            datetime.now(timezone.utc),
-            datetime.min.time(),
-            timezone.utc,
-        ) - timedelta(days=1)
-        # Do a full update once a day
-        if next_update != self._last_update:
-            _LOGGER.debug(
-                "Performing full update for %s (from %s to %s)",
-                self.entity_id,
-                self._last_update,
-                next_update,
-            )
-            self._events = await self.async_get_events(self.hass, datetime.min, datetime.max)
-        # Otherwise just look for events from yesterday forward
-        else:
-            _LOGGER.debug(
-                "Performing incremental update (from %s) for %s",
-                self._last_update,
-                self.entity_id,
-            )
-            self._events = await self.async_get_events(
-                self.hass, self._last_update, None
-            )
-        self._last_update = next_update
+        now = datetime.now()
+        events = await self.async_get_events(
+            self.hass, now, datetime.max
+        )
+        events = filter(lambda event: event.start <= now and now <= event.end, events)
+        self._event = next(events, None)
 
     async def async_get_events(
         self,
