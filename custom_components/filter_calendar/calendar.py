@@ -186,14 +186,16 @@ class FilterCalendar(CalendarEntity):
         events = await self.async_get_events(
             self.hass, now, now + timedelta(days=2)
         )
-        start = event.start
-        if isinstance(start, date):
-            start = datetime.combine(start, time.min)
-        end = event.end
-        if isinstance(end, date):
-            end = datetime.combine(end, time.max)
+        def cmp_event(event):
+            start = event.start
+            if isinstance(start, date):
+                start = datetime.combine(start, time.min)
+            end = event.end
+            if isinstance(end, date):
+                end = datetime.combine(end, time.max)
+            return start <= now and now <= end
 
-        events = filter(lambda event: start <= now and now <= end, events)
+        events = filter(cmp_event, events)
         self._event = next(events, None)
 
     async def async_get_events(
