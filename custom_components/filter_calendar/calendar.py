@@ -190,7 +190,7 @@ class FilterCalendar(CalendarEntity):
         if isinstance(start, date):
             start = datetime.combine(start, time.min)
         end = event.end
-        if isinstance(end, date)
+        if isinstance(end, date):
             end = datetime.combine(end, time.max)
 
         events = filter(lambda event: start <= now and now <= end, events)
