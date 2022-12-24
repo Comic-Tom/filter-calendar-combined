@@ -1,7 +1,7 @@
 """Calendar entity for the FilterCalendar integration"""
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 import logging
 
 from cachetools import TTLCache, keys
@@ -186,7 +186,14 @@ class FilterCalendar(CalendarEntity):
         events = await self.async_get_events(
             self.hass, now, now + timedelta(days=2)
         )
-        events = filter(lambda event: event.start <= now and now <= event.end, events)
+        start = event.start
+        if isinstance(start, date):
+            start = datetime.combine(start, time.min)
+        end = event.end
+        if isinstance(end, date)
+            end = datetime.combine(end, time.max)
+
+        events = filter(lambda event: start <= now and now <= end, events)
         self._event = next(events, None)
 
     async def async_get_events(
