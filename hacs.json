@@ -1,8 +1,5 @@
 {
     "name": "Filter Calendar",
     "hacs": "1.6.0",
-    "domains": [
-        "calendar"
-    ],
     "homeassistant": "0.118.0"
 }
