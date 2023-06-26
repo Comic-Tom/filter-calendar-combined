@@ -16,6 +16,7 @@ CONF_TRACKING_CALENDAR = "tracking_calendar"
 CONF_FILTER = "filter"
 ATTR_TRACKING_CALENDAR = "tracking"
 ATTR_FILTER = "filter"
+ATTR_REGEX = "regex"
 
 # Defaults
 DEFAULT_NAME = DOMAIN
