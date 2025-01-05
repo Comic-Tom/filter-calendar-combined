@@ -1,7 +1,7 @@
 {% set start_time = as_timestamp(states.calendar.unnamed_device.attributes.start_time) %}
 {% set end_time = as_timestamp(states.calendar.unnamed_device.attributes.end_time) %}
 {% set current_time = now().timestamp() %}
-{% set days_diff = (((start_time - current_time) // 86400) + (1 if start_time > current_time else 0)) | int %}
+{% set days_diff = ((start_time - current_time) // 86400) | int %}
 {% set is_today = days_diff == 0 %}
 {% set is_tomorrow = days_diff == 1 %}
 {% set is_within_week = days_diff >= 0 and days_diff <= 7 %}
