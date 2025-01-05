@@ -1,5 +1,3 @@
-"""Calendar entity for the FilterCalendar integration"""
-
 from abc import ABC, abstractmethod
 import asyncio
 from datetime import datetime, timedelta
@@ -32,15 +30,17 @@ from .const import (
 
 _LOGGER: logging.Logger = logging.getLogger(__package__)
 
-
 ENTITY_ID_FORMAT = "calendar.{}"
 
+# Update PLATFORM_SCHEMA to include custom options for work-related and excluded event types
 PLATFORM_SCHEMA = cv.PLATFORM_SCHEMA.extend(
     {
         vol.Required(ATTR_NAME): str,
         vol.Required(ATTR_TRACKING_CALENDAR): str,
         vol.Required(ATTR_FILTER): str,
         vol.Optional(ATTR_REGEX, default=False): bool,
+        vol.Optional('include_work_types', default=["Lunch", "One-on-One", "Inbound"]): [str],  # New option for work-related event types
+        vol.Optional('exclude_types', default=["Public Holiday", "Annual Leave", "Personal Leave"]): [str],  # Excluded event types
     }
 )
 
@@ -51,15 +51,19 @@ async def async_setup_platform(
     hass: HomeAssistant,
     config: ConfigType,
     async_add_entities: AddEntitiesCallback,
-    # pylint: disable=unused-argument
     discovery_info,
 ):
     """Set up the filter calendar platform."""
 
+    # Retrieve custom options for work-related and excluded event types
+    include_work_types = config.get('include_work_types', ["Lunch", "One-on-One", "Inbound"])
+    exclude_types = config.get('exclude_types', ["Public Holiday", "Annual Leave", "Personal Leave"])
+
+    # Initialize the filter based on regex setting
     if config[ATTR_REGEX]:
-        calendar_filter = RegexFilter(config[ATTR_FILTER])
+        calendar_filter = RegexFilter(config[ATTR_FILTER], include_work_types=include_work_types, exclude_types=exclude_types)
     else:
-        calendar_filter = AttrFilter(config[ATTR_FILTER])
+        calendar_filter = AttrFilter(config[ATTR_FILTER], include_work_types=include_work_types, exclude_types=exclude_types)
 
     sensor = FilterCalendar(
         config[ATTR_NAME],
@@ -168,8 +172,10 @@ class Filter(ABC):
     """Filter to match upstream calendar events."""
 
     @abstractmethod
-    def __init__(self, filter_spec):
+    def __init__(self, filter_spec, include_work_types, exclude_types):
         self.filter_spec = filter_spec
+        self.include_work_types = include_work_types
+        self.exclude_types = exclude_types
 
     @abstractmethod
     def search(self, event: CalendarEntity):
@@ -190,9 +196,11 @@ class AttrFilter(Filter):
     def __init__(
         self,
         filter_spec: str,
+        include_work_types: list[str],
+        exclude_types: list[str],
         attrs: list[str] = None,
     ):
-        super().__init__(filter_spec)
+        super().__init__(filter_spec, include_work_types, exclude_types)
         if attrs is None:
             attrs = ["summary", "description", "location"]
         self._attrs = attrs
@@ -205,6 +213,16 @@ class AttrFilter(Filter):
                 _LOGGER.error("CalendarEntity does not have an attribute '%s'", attr)
 
     def match(self, search: str) -> bool:
+        """Check if the event matches the filter and treat 'lunch', 'one-on-one', and 'inbound' as work."""
+        # If the event matches the 'work' categories, treat it as work
+        if any(work_type in search for work_type in self.include_work_types):
+            return True
+
+        # If the event matches excluded types (e.g., Public Holiday), exclude it
+        if any(exclude_type in search for exclude_type in self.exclude_types):
+            return False
+
+        # Match the filter spec in the event's attributes (if not excluded)
         return self.filter_spec in search
 
 
@@ -212,9 +230,11 @@ class RegexFilter(AttrFilter):
     def __init__(
         self,
         filter_spec: str,
+        include_work_types: list[str],
+        exclude_types: list[str],
         attrs=None,
     ):
-        super().__init__(filter_spec, attrs)
+        super().__init__(filter_spec, include_work_types, exclude_types, attrs)
         self.expression = re.compile(self.filter_spec)
 
     def match(self, search: str) -> bool:
@@ -237,7 +257,6 @@ class FilterCalendar(CalendarEntity):
         if not tracking_calendar_id.startswith("calendar"):
             tracking_calendar_id = f"calendar.{tracking_calendar_id}"
         self._tracking_calendar_id = tracking_calendar_id
-
         self._filter = filter_spec
         self._event = None
 
@@ -246,31 +265,98 @@ class FilterCalendar(CalendarEntity):
         """Return the next upcoming event."""
         return self._event
 
-    @Throttle(MIN_TIME_BETWEEN_UPDATES)
-    async def async_update(self):
-        """Periodically update the local state"""
-        now = dt.now()
-        events = await self.async_get_events(self.hass, now, now + timedelta(weeks=26))
-        self._event = next(events, None)
+    def format_event_time(self, event: CalendarEvent) -> str:
+        """Format the event time to show work hours (1pm to 9pm, etc.)."""
+        start_time = event.start
+        end_time = event.end
+        formatted_start_time = start_time.strftime("%I:%M %p")  # Example: 01:00 PM
+        formatted_end_time = end_time.strftime("%I:%M %p")  # Example: 09:00 PM
+        return f"{formatted_start_time} to {formatted_end_time}"
 
+@Throttle(MIN_TIME_BETWEEN_UPDATES)
+async def async_update(self):
+    """Periodically update the local state"""
+    now = dt.now()
+    events = await self.async_get_events(self.hass, now, now + timedelta(weeks=26))
+
+    # Combine events into one for the day
+    filtered_events = [event for event in events if self._filter(event)]
+    combined_events = self.combine_events(filtered_events)
+
+    # If there are combined events, set the first one as the active event
+    if combined_events:
+        self._event = combined_events[0]
+        # Format the event time for display
+        self._event_time = self.format_event_time(self._event)
+
+        # Explicitly set the state so the frontend can reflect the combined event
+        self._attr_state = self._event.summary  # Set the summary as the state
+        self._attr_start = self._event.start    # Set the start time for frontend display
+        self._attr_end = self._event.end        # Set the end time for frontend display
+
+        # Optionally, update other attributes to reflect the merged event data
+        self._attr_extra_state_attributes = {
+            "start_time": self._event.start,
+            "end_time": self._event.end,
+            "location": self._event.location,
+            "description": self._event.description,
+        }
+
+
+
+    def combine_events(self, events: list[CalendarEvent]) -> list[CalendarEvent]:
+        """Combine consecutive events of the same type into one event."""
+        if not events:
+            return []
+
+        # Sort events by start time
+        events.sort(key=lambda x: x.start)
+
+        # Initialize the merged event variables
+        merged_event_start = events[0].start
+        merged_event_end = events[0].end
+        merged_event_summary = events[0].summary
+        events_combined = []
+
+        for event in events[1:]:
+            # If events overlap or are consecutive, combine them
+            if event.start <= merged_event_end:
+                merged_event_end = max(merged_event_end, event.end)
+            else:
+                # If no overlap, add the previous merged event
+                events_combined.append(
+                    CalendarEvent(
+                        start=merged_event_start,
+                        end=merged_event_end,
+                        summary=merged_event_summary,
+                    )
+                )
+                # Reset for the next event
+                merged_event_start = event.start
+                merged_event_end = event.end
+                merged_event_summary = event.summary
+
+        # Add the last combined event
+        events_combined.append(
+            CalendarEvent(
+                start=merged_event_start,
+                end=merged_event_end,
+                summary=merged_event_summary,
+            )
+        )
+
+        return events_combined
+        
     async def async_get_events(
         self,
         hass: HomeAssistant,
         start_date: datetime,
         end_date: datetime,
-    ) -> Iterable[CalendarEvent]:
-        """Return calendar events within a datetime range."""
-
-        try:
-            return filter(
-                self._filter,
-                await CalendarStore(hass).async_get_events(
-                    self._tracking_calendar_id, start_date, end_date
-                ),
-            )
-        except CalendarUnavailable:
-            return None
-
-    @property
-    def name(self):
-        return self._name
+    ) -> list[CalendarEvent]:
+        """Retrieve and filter events."""
+        calendar_store = CalendarStore(self.hass)
+        events = await calendar_store.async_get_events(
+            self._tracking_calendar_id, start_date, end_date
+        )
+        filtered_events = [event for event in events if self._filter(event)]
+        return filtered_events
