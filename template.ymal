@@ -1,11 +1,13 @@
 {% set start_time = as_timestamp(states.calendar.unnamed_device.attributes.start_time) %}
 {% set end_time = as_timestamp(states.calendar.unnamed_device.attributes.end_time) %}
 {% set current_time = now().timestamp() %}
-{% set days_diff = ((start_time - current_time) // 86400) | int %}
-{% set is_today = days_diff == 0 %}
+{% set start_date = (start_time | timestamp_custom('%Y-%m-%d', true)) %}
+{% set current_date = (current_time | timestamp_custom('%Y-%m-%d', true)) %}
+{% set days_diff = (as_datetime(start_time).date() - as_datetime(current_time).date()).days %}
+{% set is_today = start_date == current_date %}
 {% set is_tomorrow = days_diff == 1 %}
 {% set is_within_week = days_diff >= 0 and days_diff <= 7 %}
-{% set time_format = "%-I%p" %}  {# Adjust this for your locale, e.g., "%I%p" for leading zeros in hours #}
+{% set time_format = "%-I%p" %}  {# Adjust for your locale, e.g., "%I%p" for leading zeros #}
 
 {% if is_today %}
   {{ start_time | timestamp_custom(time_format, true) | lower }} to {{ end_time | timestamp_custom(time_format, true) | lower }} today
